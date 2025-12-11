@@ -1,0 +1,144 @@
+# jarvis_core.py
+import time
+import cv2
+import numpy as np
+from emotion.camera import CameraCapture          # uses CameraCapture for frames. :contentReference[oaicite:3]{index=3}
+from emotion.face import FaceEmotionDetector     # uses DeepFace for emotion detection. :contentReference[oaicite:4]{index=4}
+from emotion.analyzer import EmotionAnalyzer     # optional smoothing and history. :contentReference[oaicite:5]{index=5}
+
+# Settings
+SIDE_PANEL_WIDTH = 320
+WINDOW_NAME = "JARVIS - Emotion Viewer (press q to quit)"
+FRAME_SCALE = 1.0   # set <1.0 to shrink camera feed if needed
+
+def make_side_panel(frame_h, emotions_dict, dominant, confidence):
+    """Create a side panel image showing emotion bars and dominant emotion."""
+    panel = np.ones((frame_h, SIDE_PANEL_WIDTH, 3), dtype=np.uint8) * 230  # light gray background
+
+    # Title
+    cv2.putText(panel, "Emotion Panel", (12, 28), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (10,10,10), 2)
+
+    # Dominant emotion box
+    cv2.putText(panel, f"Dominant: {dominant}", (12, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0,0,0), 2)
+    cv2.putText(panel, f"Confidence: {confidence:.2f}", (12, 88), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (50,50,50), 1)
+
+    # Draw bars
+    start_y = 120
+    bar_h = 26
+    padding = 10
+    max_bar_w = SIDE_PANEL_WIDTH - 140
+
+    # Sort emotions for consistent order
+    items = sorted(emotions_dict.items(), key=lambda x: -x[1])
+    for i, (emo, val) in enumerate(items):
+        y = start_y + i * (bar_h + padding)
+        label = f"{emo}"
+        score_text = f"{val:.2f}"
+        cv2.putText(panel, label, (12, y + 18), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (10,10,10), 1)
+        # bar bg
+        cv2.rectangle(panel, (110, y + 6), (110 + max_bar_w, y + 6 + bar_h), (200,200,200), -1)
+        # bar fill
+        fill_w = int(max_bar_w * float(val))
+        cv2.rectangle(panel, (110, y + 6), (110 + fill_w, y + 6 + bar_h), (80,150,255), -1)
+        # score
+        cv2.putText(panel, score_text, (110 + max_bar_w + 8, y + 22), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (20,20,20), 1)
+
+    return panel
+
+def main():
+    print("Starting JARVIS Emotion Viewer...")
+    # Initialize components
+    camera = CameraCapture()
+    face_detector = FaceEmotionDetector()
+    analyzer = EmotionAnalyzer()   # optional smoothing
+
+    # start camera capture thread
+    try:
+        camera.start()
+    except Exception as e:
+        print("Camera start failed:", e)
+        return
+
+    cv2.namedWindow(WINDOW_NAME, cv2.WINDOW_NORMAL)
+
+    try:
+        while True:
+            frame_data = camera.get_latest_frame()
+            if frame_data is None:
+                # no frames yet - small wait
+                time.sleep(0.03)
+                continue
+
+            frame, ts = frame_data
+            # resize if desired
+            if FRAME_SCALE != 1.0:
+                frame = cv2.resize(frame, (0,0), fx=FRAME_SCALE, fy=FRAME_SCALE)
+
+            # Detect emotions from current frame
+            try:
+                detection = face_detector.detect(frame)
+            except Exception as e:
+                detection = None
+                print("Face detect error:", e)
+
+            # Default empty emotions
+            emotions = { 'neutral': 0.0 }
+            dominant = 'N/A'
+            conf = 0.0
+
+            if detection:
+                # deepface-based detection returns 'emotions' (floats 0..1) and 'primary_emotion'/'dominant_emotion' per wrapper
+                if detection.get('face_detected', True) and detection.get('emotions'):
+                    # Normalized dict expected
+                    emotions = detection.get('emotions', {})
+                    # convert keys to lower and values float
+                    emotions = {k: float(v) for k, v in emotions.items()}
+                    dominant = detection.get('primary_emotion') or detection.get('dominant_emotion') or dominant
+                    conf = float(detection.get('confidence', 0.0))
+                    # add to analyzer smoothing
+                    analyzer.add_face_detection({
+                        'dominant_emotion': dominant,
+                        'emotions': emotions,
+                        'confidence': conf,
+                        'face_detected': True,
+                        'timestamp': time.time()
+                    })
+                    # get smoothed current emotion (if desired)
+                    smoothed = analyzer.get_current_emotion()
+                    if smoothed:
+                        dominant = smoothed.get('primary_emotion', dominant)
+                        conf = smoothed.get('confidence', conf)
+                else:
+                    dominant = 'No face'
+                    emotions = { 'neutral': 1.0 }
+                    conf = 0.0
+
+            # make side panel
+            h, w = frame.shape[:2]
+            panel = make_side_panel(h, emotions, dominant, conf)
+
+            # combine horizontally
+            try:
+                combined = np.hstack((frame, panel))
+            except Exception:
+                # in case sizes mismatch, resize panel to match height
+                panel = cv2.resize(panel, (SIDE_PANEL_WIDTH, h))
+                combined = np.hstack((frame, panel))
+
+            # show
+            cv2.imshow(WINDOW_NAME, combined)
+
+            # key handling
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'):
+                break
+
+    except KeyboardInterrupt:
+        pass
+    finally:
+        print("Stopping...")
+        camera.stop()
+        cv2.destroyAllWindows()
+
+if __name__ == "__main__":
+    main()
