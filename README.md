@@ -81,7 +81,7 @@ Installation
 
 Clone the repository:
 
-git clone https://github.com/YOUR-USERNAME/Project-AES.git
+git clone https://github.com/sidvortex/Project-AES.git
 cd Project-AES
 
 
