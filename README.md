@@ -244,4 +244,4 @@ This project is licensed under the MIT License — see the LICENSE file for deta
 Built with ❤️ by Sidvortex
 Part of the JARVIS Ecosystem
 
-</div> ```
+</div> 
